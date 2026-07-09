@@ -250,8 +250,12 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
                         text = "📁 PiperModels (root folder)\n" +
                                 " ├── 📁 espeak-ng-data (shared data)\n" +
                                 " ├── 📁 vits-piper-ru_RU-ruslan-medium\n" +
+                                " │     ├── 📁 espeak-ng-data (has priority)\n" +
                                 " │     ├── 📄 ru_RU-ruslan-medium.onnx\n" +
-                                " │     └── 📄 tokens.txt",
+                                " │     └── 📄 tokens.txt\n" +
+                                " └── 📁 vits-piper-ru_RU-custom-medium\n" +
+                                "       ├── 📄 ru_RU-custom-medium.onnx\n" +
+                                "       └── 📄 tokens.txt",
                         fontSize = 11.sp, color = Color.LightGray, lineHeight = 18.sp
                     )
                 }
@@ -299,7 +303,7 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
-                        Text("Added after each block", fontSize = 11.sp, color = Color.Gray)
+                        Text("Added after each sentence", fontSize = 11.sp, color = Color.Gray)
                     }
                     Row(
                         modifier = Modifier.fillMaxWidth(),

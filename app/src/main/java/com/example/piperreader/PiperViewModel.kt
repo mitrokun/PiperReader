@@ -285,7 +285,9 @@ class PiperViewModel(application: Application) : AndroidViewModel(application) {
                                         val normalizedSentence = normalizer.normalize(sentence)
                                         val startGenMs = System.currentTimeMillis()
 
-                                        val audio = ttsBackend.generate(normalizedSentence)
+                                        val cleanSentence = cleanAbbreviations(normalizedSentence)
+
+                                        val audio = ttsBackend.generate(cleanSentence)
 
                                         if (audio != null && audio.samples.isNotEmpty()) {
                                             val isLast = (j == sentences.lastIndex)
@@ -495,4 +497,20 @@ class PiperViewModel(application: Application) : AndroidViewModel(application) {
         stopPlayback()
         ttsBackend.release()
     }
+}
+
+fun cleanAbbreviations(text: String): String {
+    // 1. Убираем точку после одиночных букв (инициалы, г., д., т.е.), если это не конец предложения
+    var result = text.replace(Regex("\\b([а-яА-Яa-zA-Z])\\.(?!\\s*$)"), "$1")
+
+    // 2. Убираем точку после известных аббревиатур, если это не конец предложения
+    val multiLetterAbbrs = Regex(
+        "\\b(Mr|Mrs|Ms|Dr|St|Prof|Capt|Sgt|Col|Gen|etc|ул|пр|гр|св|ст|им|пер|наб|бул|стр|тов|ген|кап|корп|проф)\\.(?!\\s*$)",
+        RegexOption.IGNORE_CASE
+    )
+    result = result.replace(multiLetterAbbrs) { matchResult ->
+        matchResult.groupValues[1]
+    }
+
+    return result
 }

@@ -57,7 +57,18 @@ import kotlin.time.Duration.Companion.milliseconds
 
 // Регулярные выражения для разбивки текста
 private val ellipsisRegex = Regex("(?<=…[»\"]{0,2})\\s+")
-private val sentenceRegex = Regex("[.!?]+\\s*")
+private val sentenceRegex = Regex(
+    // 1. Одиночные буквы (инициалы, г., д., т.е., т.д.)
+    "(?<!\\b[а-яА-Яa-zA-Z])" +
+            // 2. Двухбуквенные сокращения (ул., пр., ст., им., св., Mr., Dr., Ms., St., Jr., Sr.)
+            "(?<!\\bMr|\\bDr|\\bMs|\\bSt|\\bJr|\\bSr|\\bул|\\bпр|\\bгр|\\bсв|\\bст|\\bим)" +
+            // 3. Трехбуквенные сокращения (Mrs., Sgt., Col., Gen., etc., пер., наб., бул., стр., тов., ген., кап.)
+            "(?<!\\bMrs|\\bSgt|\\bCol|\\bGen|\\betc|\\bпер|\\bнаб|\\bбул|\\bстр|\\bтов|\\bген|\\bкап)" +
+            // 4. Четырехбуквенные сокращения (Prof., Capt., корп., проф.)
+            "(?<!\\bProf|\\bCapt|\\bкорп|\\bпроф)" +
+            "[.!?]+\\s*",
+    RegexOption.IGNORE_CASE
+)
 
 data class PiperModelInfo(
     val name: String,

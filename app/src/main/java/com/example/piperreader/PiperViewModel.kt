@@ -16,6 +16,8 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.seconds
 import java.io.File
 import java.util.Locale
 
@@ -271,7 +273,7 @@ class PiperViewModel(application: Application) : AndroidViewModel(application) {
                             try {
                                 val targetModel = selectedModel?.name
                                 while (readyModelName != targetModel && isActive) {
-                                    delay(100)
+                                    delay(100.milliseconds)
                                 }
 
                                 for (i in startIndex until chunksList.size) {
@@ -279,10 +281,15 @@ class PiperViewModel(application: Application) : AndroidViewModel(application) {
                                     val chunkText = chunksList[i].text
                                     val sentences = splitIntoSentences(chunkText)
 
-                                    for (j in sentences.indices) {
+                                    for ((j, sentence) in sentences.withIndex()) {
                                         if (!isActive) break
-                                        val sentence = sentences[j]
-                                        val normalizedSentence = normalizer.normalize(sentence)
+
+                                        val normalizedSentence = if (hasCyrillic(sentence)) {
+                                            normalizer.normalize(sentence)
+                                        } else {
+                                            sentence
+                                        }
+
                                         val startGenMs = System.currentTimeMillis()
 
                                         val cleanSentence = cleanAbbreviations(normalizedSentence)
@@ -424,7 +431,7 @@ class PiperViewModel(application: Application) : AndroidViewModel(application) {
 
                                 currentTrack?.let { track ->
                                     while (track.playbackHeadPosition < totalWrittenFrames && isActive) {
-                                        delay(50)
+                                        delay(50.milliseconds)
                                     }
                                 }
                             } finally {
@@ -464,7 +471,7 @@ class PiperViewModel(application: Application) : AndroidViewModel(application) {
                 var remaining = mins * 60
                 timerRemainingSeconds = remaining
                 while (remaining > 0) {
-                    delay(10000L)
+                    delay(10.seconds)
                     remaining -= 10
                     timerRemainingSeconds = remaining
                 }
@@ -483,13 +490,12 @@ class PiperViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun updatePrefsOnStop() {
-        prefs.edit().apply {
+        prefs.edit {
             putString("selectedModel", selectedModelName)
             putBoolean("isEditing", isEditing)
             putInt("activeIndex", activeIndex)
             putInt("sentencePauseMs", sentencePauseMs)
             putBoolean("keepScreenOn", keepScreenOn)
-            apply()
         }
     }
 
@@ -498,19 +504,25 @@ class PiperViewModel(application: Application) : AndroidViewModel(application) {
         ttsBackend.release()
     }
 }
+// Вспомогательная функция очистки точек у сокращений перед отправкой в TTS
+private val singleLetterAbbrRegex = Regex("\\b([а-яА-Яa-zA-Z])\\.(?!\\s*$)")
+private val multiLetterAbbrRegex = Regex(
+    "\\b(Mr|Mrs|Ms|Dr|St|Prof|Capt|Sgt|Col|Gen|etc|ул|пр|гр|св|ст|им|пер|наб|бул|стр|тов|ген|кап|корп|проф)\\.(?!\\s*$)",
+    RegexOption.IGNORE_CASE
+)
 
+// Вспомогательная функция очистки точек у сокращений перед отправкой в TTS
 fun cleanAbbreviations(text: String): String {
-    // 1. Убираем точку после одиночных букв (инициалы, г., д., т.е.), если это не конец предложения
-    var result = text.replace(Regex("\\b([а-яА-Яa-zA-Z])\\.(?!\\s*$)"), "$1")
+    // 1. Убираем точку после одиночных букв
+    var result = text.replace(singleLetterAbbrRegex, "$1")
 
-    // 2. Убираем точку после известных аббревиатур, если это не конец предложения
-    val multiLetterAbbrs = Regex(
-        "\\b(Mr|Mrs|Ms|Dr|St|Prof|Capt|Sgt|Col|Gen|etc|ул|пр|гр|св|ст|им|пер|наб|бул|стр|тов|ген|кап|корп|проф)\\.(?!\\s*$)",
-        RegexOption.IGNORE_CASE
-    )
-    result = result.replace(multiLetterAbbrs) { matchResult ->
+    // 2. Убираем точку после известных аббревиатур
+    result = result.replace(multiLetterAbbrRegex) { matchResult ->
         matchResult.groupValues[1]
     }
 
     return result
 }
+
+// Сверхбыстрая проверка строки на наличие кириллических букв
+fun hasCyrillic(text: String): Boolean = text.any { it in '\u0400'..'\u04FF' }

@@ -1,10 +1,14 @@
+
+
+
+
 ## PiperReader
 
-An offline voice book reader for Android, powered by [Piper TTS](https://github.com/OHF-voice/piper1-gpl) and [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx). Supports Russian text normalization.
+An offline voice book reader for Android, powered by [Piper TTS](https://github.com/OHF-voice/piper1-gpl) and [Sherpa-ONNX](https://github.com/k2-fsa/sherpa-onnx).
 
 <details>
 <summary>UI</summary>
-<img height="960" alt="image" src="https://github.com/user-attachments/assets/c4856ac3-b07a-4764-8283-59381ec17080" />
+<video src="https://github.com/user-attachments/assets/cdc9cbed-4d14-4cb8-a385-ce1b2a29fb80" width="100%" controls></video>
 </details>
 
 #### Why Manual Model Installation?

@@ -4,10 +4,12 @@ import android.app.Activity
 import android.Manifest
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.EditText
@@ -51,6 +53,11 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
+import androidx.compose.ui.unit.Dp
+import androidx.core.net.toUri
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.isImeVisible
 import kotlinx.coroutines.*
 import kotlin.math.pow
 import kotlin.time.Duration.Companion.milliseconds
@@ -90,19 +97,17 @@ data class AudioTask(
         if (this === other) return true
         if (javaClass != other?.javaClass) return false
         other as AudioTask
+
+        // Сравниваем ТОЛЬКО метаданные. Массивы не трогаем!
         if (index != other.index) return false
-        if (!samples.contentEquals(other.samples)) return false
         if (sampleRate != other.sampleRate) return false
-        if (rtf != other.rtf) return false
         if (isLastOfChunk != other.isLastOfChunk) return false
         return true
     }
 
     override fun hashCode(): Int {
         var result = index
-        result = 31 * result + samples.contentHashCode()
         result = 31 * result + sampleRate
-        result = 31 * result + rtf.hashCode()
         result = 31 * result + isLastOfChunk.hashCode()
         return result
     }
@@ -152,18 +157,29 @@ class MainActivity : ComponentActivity() {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             android.os.Environment.isExternalStorageManager()
         } else {
-            ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
+            ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
 
     var hasPermission by remember { mutableStateOf(activity.checkStoragePermission()) }
+    val isKeyboardVisible = WindowInsets.isImeVisible
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        hasPermission = isGranted
+        if (isGranted) {
+            viewModel.scanModels()
+        }
+    }
+
     val shouldKeepScreenOn = viewModel.keepScreenOn && viewModel.isPlaying && !viewModel.isPaused
 
     // Ссылка на активный нативный EditText для сбора текста "по требованию"
@@ -203,6 +219,20 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
     val clipboardManager = remember { context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager }
     val focusRequester = remember { FocusRequester() }
     var focusTrigger by remember { mutableStateOf(false) }
+
+    // Переменные для временного показа номера блока
+    var lastTappedIndex by remember { mutableStateOf<Int?>(null) }
+    var tapTrigger by remember { mutableIntStateOf(0) }
+    var temporaryStatus by remember { mutableStateOf<String?>(null) }
+
+    // Эффект временного показа статуса
+    LaunchedEffect(lastTappedIndex, tapTrigger) {
+        lastTappedIndex?.let { index ->
+            temporaryStatus = "${index + 1} / ${viewModel.chunksList.size}"
+            delay(1500.milliseconds)
+            temporaryStatus = null
+        }
+    }
 
     val filePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
         uri?.let { viewModel.loadFileFromUri(it) }
@@ -265,14 +295,20 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
                 onClick = {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                         try {
-                            context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply { data = android.net.Uri.parse("package:${context.packageName}") })
+                            context.startActivity(Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply { data = "package:${context.packageName}".toUri() })
                         } catch (_: Exception) {
-                            context.startActivity(android.content.Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                            context.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
                         }
+                    } else {
+                        permissionLauncher.launch(Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     }
                 },
                 modifier = Modifier.fillMaxWidth()
-            ) { Text("GRANTED ACCESS IN SETTINGS") }
+            ) {
+                Text(
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) "GRANTED ACCESS IN SETTINGS" else "GRANT ACCESS"
+                )
+            }
             Spacer(modifier = Modifier.height(12.dp))
             OutlinedButton(
                 onClick = { hasPermission = activity.checkStoragePermission() },
@@ -376,55 +412,81 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
         )
     }
 
-    Column(modifier = Modifier.padding(12.dp).fillMaxSize().systemBarsPadding()) {
-        Row(modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            val btnMod = Modifier.padding(horizontal = 1.dp)
-            val padVals = PaddingValues(horizontal = 4.dp, vertical = 8.dp)
+    Column(modifier = Modifier.padding(12.dp).fillMaxSize().systemBarsPadding().imePadding()) {
 
-            TextButton(onClick = { showSettings = true }, modifier = btnMod, contentPadding = padVals) { Text("⚙ SET", fontSize = 12.sp) }
-            TextButton(onClick = { filePickerLauncher.launch("text/plain") }, modifier = btnMod, contentPadding = padVals) { Text("OPEN", fontSize = 12.sp) }
-            TextButton(onClick = {
-                if (clipboardManager.hasPrimaryClip()) {
-                    val pasted = clipboardManager.primaryClip?.getItemAt(0)?.text?.toString()
-                    if (!pasted.isNullOrEmpty()) {
-                        viewModel.rawText = pasted
+        CompositionLocalProvider(LocalMinimumInteractiveComponentSize provides Dp.Unspecified) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(bottom = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                val btnMod = Modifier.height(36.dp).padding(horizontal = 1.dp)
+                val padVals = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
+
+                TextButton(onClick = { showSettings = true }, modifier = btnMod, contentPadding = padVals) {
+                    Text("⚙ SET", fontSize = 12.sp)
+                }
+                TextButton(onClick = { filePickerLauncher.launch("text/plain") }, modifier = btnMod, contentPadding = padVals) {
+                    Text("OPEN", fontSize = 12.sp)
+                }
+                TextButton(
+                    onClick = {
+                        if (clipboardManager.hasPrimaryClip()) {
+                            val pasted = clipboardManager.primaryClip?.getItemAt(0)?.text?.toString()
+                            if (!pasted.isNullOrEmpty()) {
+                                viewModel.rawText = pasted
+                                viewModel.isEditing = true
+                                focusTrigger = true
+                            }
+                        }
+                    },
+                    modifier = btnMod,
+                    contentPadding = padVals
+                ) {
+                    Text("PASTE", fontSize = 12.sp)
+                }
+                TextButton(
+                    onClick = {
+                        viewModel.rawText = ""
+                        viewModel.activeIndex = -1
                         viewModel.isEditing = true
                         focusTrigger = true
-                    }
+                    },
+                    modifier = btnMod,
+                    contentPadding = padVals
+                ) {
+                    Text("CLEAR", fontSize = 12.sp)
                 }
-            }, modifier = btnMod, contentPadding = padVals) { Text("PASTE", fontSize = 12.sp) }
-            TextButton(onClick = {
-                viewModel.rawText = ""
-                viewModel.activeIndex = -1
-                viewModel.isEditing = true
-                focusTrigger = true
-            }, modifier = btnMod, contentPadding = padVals) { Text("CLEAR", fontSize = 12.sp) }
 
-            TextButton(onClick = {
-                if (viewModel.isEditing) {
-                    // Забираем актуальный текст из EditText перед парсингом
-                    activeEditText?.let { viewModel.rawText = it.text.toString() }
-
-                    scope.launch {
-                        viewModel.statusText = "Parsing text..."
-                        viewModel.saveTextToStorage(viewModel.rawText)
-                        viewModel.chunksList = withContext(Dispatchers.Default) { splitText(viewModel.rawText) }
-                        viewModel.isEditing = false
-                        viewModel.statusText = "Ready"
-                    }
-                } else {
-                    viewModel.isEditing = true
-                    if (viewModel.activeIndex in viewModel.chunksList.indices) {
-                        val tempIndex = minOf(viewModel.chunksList.lastIndex, viewModel.activeIndex + 3)
-                        val tempOffset = viewModel.rawText.indexOf(viewModel.chunksList[tempIndex].text)
-                        if (tempOffset >= 0) {
-                            viewModel.cursorPosition = tempOffset
+                TextButton(
+                    onClick = {
+                        if (viewModel.isEditing) {
+                            activeEditText?.let { viewModel.rawText = it.text.toString() }
+                            scope.launch {
+                                viewModel.statusText = "Parsing text..."
+                                viewModel.saveTextToStorage(viewModel.rawText)
+                                viewModel.chunksList = withContext(Dispatchers.Default) { splitText(viewModel.rawText) }
+                                viewModel.isEditing = false
+                                viewModel.statusText = "Ready"
+                            }
+                        } else {
+                            viewModel.isEditing = true
+                            if (viewModel.activeIndex in viewModel.chunksList.indices) {
+                                val tempIndex = minOf(viewModel.chunksList.lastIndex, viewModel.activeIndex + 3)
+                                val tempOffset = viewModel.rawText.indexOf(viewModel.chunksList[tempIndex].text)
+                                if (tempOffset >= 0) {
+                                    viewModel.cursorPosition = tempOffset
+                                }
+                            }
+                            focusTrigger = true
                         }
-                    }
-                    focusTrigger = true
+                    },
+                    modifier = btnMod,
+                    contentPadding = padVals
+                ) {
+                    Text(if (viewModel.isEditing) "READ" else "EDIT", fontSize = 12.sp)
                 }
-            }, modifier = btnMod, contentPadding = padVals) {
-                Text(if (viewModel.isEditing) "READ" else "EDIT", fontSize = 12.sp)
             }
         }
 
@@ -439,11 +501,16 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
                 AndroidView(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(8.dp)
+                        .padding(
+                            start = 8.dp,
+                            top = 8.dp,
+                            end = 8.dp,
+                            bottom = if (isKeyboardVisible) 0.dp else 8.dp
+                        )
                         .focusRequester(focusRequester),
                     factory = { ctx ->
                         EditText(ctx).apply {
-                            activeEditText = this // Сохраняем ссылку на EditText
+                            activeEditText = this
                             background = null
                             setTextColor(themeTextColor)
                             textSize = 18f
@@ -453,21 +520,28 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
                             setText(viewModel.rawText)
                         }
                     },
+                    onRelease = {
+                        activeEditText = null // Предотвращает утечку памяти, сбрасывая ссылку
+                    },
                     update = { view ->
                         view.setTextColor(themeTextColor)
                         if (view.text.toString() != viewModel.rawText) {
                             view.setText(viewModel.rawText)
                         }
+                    }
+                )
 
-                        // Применяем позицию курсора, если она была задана
-                        viewModel.cursorPosition?.let { pos ->
+                // Безопасное изменение состояния курсора (вынесено из update)
+                LaunchedEffect(viewModel.cursorPosition, activeEditText) {
+                    viewModel.cursorPosition?.let { pos ->
+                        activeEditText?.let { view ->
                             if (pos <= view.text.length) {
                                 view.setSelection(pos)
-                                viewModel.cursorPosition = null // Сбрасываем, чтобы не зацикливать вызовы
+                                viewModel.cursorPosition = null
                             }
                         }
                     }
-                )
+                }
 
                 LaunchedEffect(focusTrigger) {
                     if (focusTrigger) {
@@ -490,7 +564,12 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
                 var showPillWithDelay by remember { mutableStateOf(false) }
 
                 LaunchedEffect(isDragged, isDraggingPill) {
-                    if (isDragged || isDraggingPill) showPillWithDelay = true else { delay(1500.milliseconds); showPillWithDelay = false }
+                    if (isDragged || isDraggingPill) {
+                        showPillWithDelay = true
+                    } else {
+                        delay(1500.milliseconds)
+                        showPillWithDelay = false
+                    }
                 }
 
                 val showScrollPill by remember { derivedStateOf { showPillWithDelay && viewModel.chunksList.isNotEmpty() } }
@@ -500,7 +579,9 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
 
                 LaunchedEffect(viewModel.activeIndex, viewModel.isEditing, viewModel.chunksList) {
                     if (!viewModel.isEditing && viewModel.activeIndex in viewModel.chunksList.indices) {
-                        try { listState.customAnimateScrollToItem(viewModel.activeIndex) } catch (_: Exception) {}
+                        if (viewModel.activeIndex >= 0 && viewModel.activeIndex < viewModel.chunksList.size) {
+                            listState.customAnimateScrollToItem(viewModel.activeIndex)
+                        }
                     }
                 }
 
@@ -521,7 +602,12 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
                                     },
                                     shape = RoundedCornerShape(4.dp)
                                 )
-                                .clickable(enabled = !viewModel.isPlaying) { viewModel.activeIndex = index }
+                                .clickable(enabled = !viewModel.isPlaying) {
+                                    viewModel.activeIndex = index
+                                    // Клик запускает временный показ статуса
+                                    lastTappedIndex = index
+                                    tapTrigger++
+                                }
                                 .padding(8.dp)
                         )
                     }
@@ -529,6 +615,7 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
 
                 if (showScrollPill) {
                     var dragAccumulator by remember { mutableFloatStateOf(0f) }
+                    var lastTargetIndex by remember { mutableIntStateOf(-1) }
                     val pillText by remember {
                         derivedStateOf { "${listState.firstVisibleItemIndex + 1} / ${viewModel.chunksList.size}" }
                     }
@@ -542,6 +629,7 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
                                 detectDragGestures(
                                     onDragStart = {
                                         isDraggingPill = true
+                                        lastTargetIndex = -1
                                         dragAccumulator = (if (viewModel.chunksList.size > 1) listState.firstVisibleItemIndex.toFloat() / (viewModel.chunksList.size - 1).toFloat() else 0f) * containerHeight
                                     },
                                     onDragEnd = { isDraggingPill = false },
@@ -550,7 +638,12 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
                                         change.consume()
                                         dragAccumulator = (dragAccumulator + dragAmount.y).coerceIn(0f, containerHeight)
                                         val targetIndex = ((dragAccumulator / containerHeight) * (viewModel.chunksList.size - 1)).toInt().coerceIn(0, viewModel.chunksList.size - 1)
-                                        scope.launch { listState.scrollToItem(targetIndex) }
+
+                                        // Ограничение спама скроллом для плавности интерфейса
+                                        if (targetIndex != lastTargetIndex) {
+                                            lastTargetIndex = targetIndex
+                                            scope.launch { listState.scrollToItem(targetIndex) }
+                                        }
                                     }
                                 )
                             }
@@ -562,34 +655,39 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
             }
         }
 
-        Spacer(modifier = Modifier.height(12.dp))
+        if (!isKeyboardVisible) {
+            Spacer(modifier = Modifier.height(12.dp))
+        }
 
         Column(modifier = Modifier.wrapContentHeight().fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Box(modifier = Modifier.fillMaxWidth()) {
-                OutlinedTextField(
-                    value = viewModel.selectedModel?.name ?: "Модели не найдены",
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("Voice") },
-                    modifier = Modifier.fillMaxWidth(),
-                    trailingIcon = { IconButton(onClick = { dropdownExpanded = true }) { Text("▼") } },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+
+            if (!isKeyboardVisible) {
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedTextField(
+                        value = viewModel.selectedModel?.name ?: "Models not found",
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Voice") },
+                        modifier = Modifier.fillMaxWidth(),
+                        trailingIcon = { IconButton(onClick = { dropdownExpanded = true }) { Text("▼") } },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.primary,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                        )
                     )
-                )
-                DropdownMenu(expanded = dropdownExpanded, onDismissRequest = { dropdownExpanded = false }, modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp)) {
-                    if (viewModel.modelsList.isEmpty()) {
-                        DropdownMenuItem(text = { Text("Пусто. Нажмите SCAN", fontSize = 16.sp) }, onClick = { dropdownExpanded = false })
-                    } else {
-                        viewModel.modelsList.forEach { m ->
-                            DropdownMenuItem(
-                                text = { Text(text = m.name, fontSize = 18.sp, modifier = Modifier.padding(vertical = 12.dp)) },
-                                onClick = {
-                                    viewModel.onModelSelected(m)
-                                    dropdownExpanded = false
-                                }
-                            )
+                    DropdownMenu(expanded = dropdownExpanded, onDismissRequest = { dropdownExpanded = false }, modifier = Modifier.fillMaxWidth().heightIn(max = 450.dp)) {
+                        if (viewModel.modelsList.isEmpty()) {
+                            DropdownMenuItem(text = { Text("Empty. Press SCAN", fontSize = 16.sp) }, onClick = { dropdownExpanded = false })
+                        } else {
+                            viewModel.modelsList.forEach { m ->
+                                DropdownMenuItem(
+                                    text = { Text(text = m.name, fontSize = 18.sp, modifier = Modifier.padding(vertical = 12.dp)) },
+                                    onClick = {
+                                        viewModel.onModelSelected(m)
+                                        dropdownExpanded = false
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -615,8 +713,22 @@ fun PiperMainScreen(activity: MainActivity, viewModel: PiperViewModel) {
                 ) { Text("STOP") }
             }
 
-            val displayStatus = if (viewModel.timerRemainingSeconds > 0) "${viewModel.statusText} (Sleep: ${(viewModel.timerRemainingSeconds + 59) / 60}m)" else viewModel.statusText
-            Text(text = displayStatus, fontSize = 14.sp, color = MaterialTheme.colorScheme.primary, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp))
+            if (!isKeyboardVisible) {
+                // Временный локальный статус перекрывает глобальный, если задан
+                val currentStatusText = temporaryStatus ?: viewModel.statusText
+                val displayStatus = if (viewModel.timerRemainingSeconds > 0) {
+                    "$currentStatusText (Sleep: ${(viewModel.timerRemainingSeconds + 59) / 60}m)"
+                } else {
+                    currentStatusText
+                }
+                Text(
+                    text = displayStatus,
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp)
+                )
+            }
         }
     }
 }

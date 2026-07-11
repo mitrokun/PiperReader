@@ -338,8 +338,10 @@ class PiperViewModel(application: Application) : AndroidViewModel(application) {
                             try {
                                 for (task in audioChannel) {
                                     if (!isActive) break
-                                    activeIndex = task.index
-                                    statusText = "${task.index + 1}/${chunksList.size} [RTF: ${task.rtf}]"
+                                    withContext(Dispatchers.Main.immediate) {
+                                        activeIndex = task.index
+                                        statusText = "${task.index + 1}/${chunksList.size} [RTF: ${task.rtf}]"
+                                    }
 
                                     if (currentTrack == null || currentSampleRate != task.sampleRate) {
                                         currentTrack?.release()

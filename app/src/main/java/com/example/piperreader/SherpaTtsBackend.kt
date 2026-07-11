@@ -48,7 +48,7 @@ class SherpaTtsBackend : TtsBackend {
             withContext(Dispatchers.IO) {
                 val engine = ttsEngine ?: return@withContext null
                 val audio = engine.generate(text)
-                if (audio != null && audio.samples.isNotEmpty()) {
+                if (audio.samples.isNotEmpty()) {
                     TtsAudioResult(audio.samples, audio.sampleRate)
                 } else {
                     null

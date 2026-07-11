@@ -70,13 +70,15 @@ class RussianNormalizer(private val context: Context) {
         "годах"  to mapOf("ый" to "ых",  "ой" to "ых",  "ий" to "ьих")
     )
 
+    // 1. Закрывающая скобка + знак препинания (сохраняем знак и ставим пробел)
+// 1. Закрывающая скобка + знак препинания (самое важное для интонации)
     private val regexCloseParenPunct = Regex("\\s*\\)\\s*([,.!?])\\s*")
-    private val regexCloseParenAlphanum = Regex("\\s*\\)\\s*(?=[а-яА-ЯёЁa-zA-Z0-9])")
-    private val regexOpenParenAlphanum = Regex("(?<=[а-яА-ЯёЁa-zA-Z0-9])\\s*\\(\\s*")
+
+    // 2. Скобки на стыке с текстом -> превращаем в запятые (для пауз в речи)
+    private val regexParenToComma = Regex("(?<=[а-яА-ЯёЁa-zA-Z0-9])\\s*\\(\\s*|\\s*\\)\\s*(?=[а-яА-ЯёЁa-zA-Z0-9])")
+
+    // 3. Все оставшиеся скобки -> удаляем
     private val regexLeftoverParens = Regex("[()]")
-    private val regexDoubleSpaces = Regex(" +")
-    private val regexSpaceComma = Regex(" ,")
-    private val regexSpacePeriod = Regex(" \\.")
 
     suspend fun loadDictionary() = withContext(Dispatchers.IO) {
         if (isLoaded) return@withContext
@@ -111,13 +113,14 @@ class RussianNormalizer(private val context: Context) {
         result = wordRegex.replace(result) { matchResult ->
             val word = matchResult.value
 
-            // ОПТИМИЗАЦИЯ: избегаем создания лишних строк, если слово и так в нижнем регистре
             val hasUpperCase = word.any { it.isUpperCase() }
             val lowWord = if (hasUpperCase) word.lowercase() else word
             val isCapitalized = word.isNotEmpty() && word[0].isUpperCase()
 
-            if (adverbFixes.containsKey(lowWord)) {
-                return@replace restoreCase(word, adverbFixes[lowWord]!!)
+            // 1. ОДИНАРНЫЙ ПОИСК для наречий
+            val adverb = adverbFixes[lowWord]
+            if (adverb != null) {
+                return@replace restoreCase(word, adverb)
             }
 
             if (word.contains('-')) {
@@ -127,22 +130,31 @@ class RussianNormalizer(private val context: Context) {
                     val lowPart = if (partHasUpper) part.lowercase() else part
                     val partCap = part.isNotEmpty() && part[0].isUpperCase()
 
-                    if (index != parts.lastIndex && compoundPrefixes.containsKey(lowPart)) {
-                        restoreCase(part, compoundPrefixes[lowPart]!!)
-                    } else if (partCap && properNounsMap.containsKey(lowPart)) {
-                        restoreCase(part, properNounsMap[lowPart]!!)
-                    } else if (isLoaded && part.contains('е', ignoreCase = true) && yoMap.containsKey(lowPart)) {
-                        restoreCase(part, yoMap[lowPart]!!)
+                    // ОДИНАРНЫЙ ПОИСК для частей слова
+                    val compound = compoundPrefixes[lowPart]
+                    val properNoun = properNounsMap[lowPart]
+                    val yoWord = yoMap[lowPart]
+
+                    if (index != parts.lastIndex && compound != null) {
+                        restoreCase(part, compound)
+                    } else if (partCap && properNoun != null) {
+                        restoreCase(part, properNoun)
+                    } else if (isLoaded && part.contains('е', ignoreCase = true) && yoWord != null) {
+                        restoreCase(part, yoWord)
                     } else {
                         part
                     }
                 }
                 newParts.joinToString("-")
             } else {
-                if (isCapitalized && properNounsMap.containsKey(lowWord)) {
-                    restoreCase(word, properNounsMap[lowWord]!!)
-                } else if (isLoaded && word.contains('е', ignoreCase = true) && yoMap.containsKey(lowWord)) {
-                    restoreCase(word, yoMap[lowWord]!!)
+                // ОДИНАРНЫЙ ПОИСК для целых слов
+                val properNoun = properNounsMap[lowWord]
+                val yoWord = yoMap[lowWord]
+
+                if (isCapitalized && properNoun != null) {
+                    restoreCase(word, properNoun)
+                } else if (isLoaded && word.contains('е', ignoreCase = true) && yoWord != null) {
+                    restoreCase(word, yoWord)
                 } else {
                     word
                 }
@@ -196,12 +208,8 @@ class RussianNormalizer(private val context: Context) {
     private fun handleParentheses(text: String): String {
         var res = text
         res = regexCloseParenPunct.replace(res, "$1 ")
-        res = regexCloseParenAlphanum.replace(res, ", ")
-        res = regexOpenParenAlphanum.replace(res, ", ")
-        res = regexLeftoverParens.replace(res, " ")
-        res = regexDoubleSpaces.replace(res, " ")
-        res = regexSpaceComma.replace(res, ",")
-        res = regexSpacePeriod.replace(res, ".")
+        res = regexParenToComma.replace(res, ", ")
+        res = regexLeftoverParens.replace(res, "")
         return res.trim()
     }
 

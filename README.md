@@ -18,3 +18,8 @@ This app does not feature an in-app model downloader. It was specifically built 
 https://github.com/k2-fsa/sherpa-onnx/releases/tag/tts-models
 
 Get the pre-built APK directly on [TG](https://t.me/HAassist/1693)
+
+---
+The `sherpa-onnx` library consumes up to 600 MB on the longest sentences, but usually less. Almost all SoCs will synthesize voice faster than real time.
+
+<img width="480" alt="image" src="https://github.com/user-attachments/assets/129f3a70-1e0c-4a68-a1bf-6ddd189de34c" />
